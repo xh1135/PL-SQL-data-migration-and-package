@@ -1,0 +1,887 @@
+--1.create tables
+CREATE TABLE hf_address (
+    address_pk   NUMBER NOT NULL,
+    address      VARCHAR2(200),
+    address2     VARCHAR2(200),
+    city         VARCHAR2(200),
+    state        VARCHAR2(200),
+    zip          NUMBER,
+    dba_fk       NUMBER NOT NULL
+);
+
+ALTER TABLE hf_address ADD CONSTRAINT hf_address_pk PRIMARY KEY ( address_pk );
+
+CREATE TABLE hf_category (
+    category_pk        NUMBER NOT NULL,
+    product_category   VARCHAR2(200)
+);
+
+ALTER TABLE hf_category ADD CONSTRAINT hf_category_pk PRIMARY KEY ( category_pk );
+
+CREATE TABLE hf_category_company (
+    com_cat_pk    NUMBER NOT NULL,
+    company_fk    NUMBER NOT NULL,
+    category_fk   NUMBER NOT NULL
+);
+
+ALTER TABLE hf_category_company ADD CONSTRAINT hf_category_company_pk PRIMARY KEY ( com_cat_pk );
+
+CREATE TABLE hf_company (
+    company_pk     NUMBER NOT NULL,
+    company_name   VARCHAR2(200)
+);
+
+ALTER TABLE hf_company ADD CONSTRAINT hf_company_pk PRIMARY KEY ( company_pk );
+
+CREATE TABLE hf_dba (
+    dba_pk       NUMBER NOT NULL,
+    dba_name     VARCHAR2(200),
+    company_fk   NUMBER NOT NULL
+);
+
+ALTER TABLE hf_dba ADD CONSTRAINT hf_dba_pk PRIMARY KEY ( dba_pk );
+
+CREATE TABLE hf_phone (
+    phone_pk       NUMBER NOT NULL,
+    phone_number   VARCHAR2(50),
+    dba_fk         NUMBER NOT NULL
+);
+
+ALTER TABLE hf_phone ADD CONSTRAINT hf_phone_pk PRIMARY KEY ( phone_pk );
+
+ALTER TABLE hf_address
+    ADD CONSTRAINT hf_address_hf_dba_fk FOREIGN KEY ( dba_fk )
+        REFERENCES hf_dba ( dba_pk );
+
+ALTER TABLE hf_category_company
+    ADD CONSTRAINT hf_category_company_fk FOREIGN KEY ( category_fk )
+        REFERENCES hf_category ( category_pk );
+
+ALTER TABLE hf_category_company
+    ADD CONSTRAINT hf_category_company_hffk FOREIGN KEY ( company_fk )
+        REFERENCES hf_company ( company_pk );
+
+ALTER TABLE hf_dba
+    ADD CONSTRAINT hf_dba_hf_company_fk FOREIGN KEY ( company_fk )
+        REFERENCES hf_company ( company_pk );
+
+ALTER TABLE hf_phone
+    ADD CONSTRAINT hf_phone_hf_dba_fk FOREIGN KEY ( dba_fk )
+        REFERENCES hf_dba ( dba_pk );
+--2.Primary key triggers
+--trigger for HF_ADDRESS
+--create sequence seq_hf_address;
+create or replace trigger trig_hf_address
+    before insert on hf_address
+    for each row
+declare
+    v_address_pk hf_address.address_pk%type;
+begin
+    if :NEW.address_pk is null then
+        select seq_hf_address.nextval
+        into v_address_pk
+        from dual;
+        
+        :NEW.address_pk := v_address_pk;
+    end if;
+end;
+--trigger for hf_phone
+--create sequence seq_hf_phone
+create or replace trigger trig_hf_phone
+    before insert on hf_phone
+    for each row
+declare
+    v_phone_pk hf_phone.phone_pk%type;
+begin
+    if:NEW.phone_pk is null then
+        select seq_hf_phone.nextval
+        into v_phone_pk
+        from dual;
+        
+        :NEW.phone_pk := v_phone_pk;
+    end if;
+end;
+--trigger for hf_dba
+--create sequence seq_hf_dba
+create or replace trigger trig_hf_dba
+    before insert on hf_dba
+    for each row
+declare
+    v_dba_pk hf_dba.dba_pk%type;
+begin
+    if :NEW.dba_pk is null then
+        select seq_hf_dba.nextval
+        into v_dba_pk
+        from dual;
+
+        :NEW.dba_pk :=v_dba_pk;
+    end if;
+end ;
+--trigger for hf_company
+--create sequence seq_hf_company
+create or replace trigger trig_hf_company
+    before insert on hf_company
+    for each row
+declare
+    v_company_pk hf_company.company_pk%type;
+begin
+    if :NEW.company_pk is null then
+    select seq_hf_company.nextval
+    into v_company_pk
+    from dual;
+    
+    :NEW.company_pk := v_company_pk;
+    end if;
+end;
+--trigger for hf_category
+--create sequence seq_hf_category
+create or replace trigger trig_hf_category
+    before insert on hf_category
+    for each row
+declare
+    v_category_pk hf_category.category_pk%type;
+begin
+    if :NEW.category_pk is null then
+        select seq_hf_category.nextval
+        into v_category_pk
+        from dual;
+
+        :NEW.category_pk :=v_category_pk;
+    end if;
+end ;
+--trigger for hf_category_company
+--create sequence seq_hf_category_company
+create or replace trigger trig_hf_category_company
+    before insert on hf_category_company
+    for each row
+declare
+    v_catefory_company_pk hf_category_company.com_cat_pk%type;
+begin
+    if :NEW.com_cat_pk is null then
+        select seq_hf_category_company.nextval
+        into v_catefory_company_pk
+        from dual;
+
+        :NEW.com_cat_pk :=v_catefory_company_pk;
+    end if;
+end ;
+
+--3. create a packge for move data from stage table to 3NF tables---
+--public
+create or replace package hf_insert_pkg
+is
+procedure p_insert_hf_category (v_limit_number number);
+procedure p_insert_hf_company (v_limit_number number);
+procedure p_insert_hf_dba (v_limit_number number);
+procedure p_insert_hf_phone (v_limit_number number);
+procedure p_insert_hf_address (v_limit_number number);
+procedure p_insert_hf_category_company (v_limit_number number);
+procedure p_load_supplier_date;
+end hf_insert_pkg;
+--private
+create or replace package body hf_insert_pkg
+is
+--procedure to move data from stage to hf_category
+procedure p_insert_hf_category (v_limit_number number)
+is
+v_start_time_nr number;
+v_end_time_nr number;
+v_elapsed_time_nr number;
+--cursor to select value from stage table
+cursor cur_category is
+select seq_hf_category.nextval, product_category from
+(select distinct trim(upper(product_category)) product_category from MASY_IB48.MEDI_SUPPLIER_STAGE
+minus
+select product_category
+from hf_category);
+--delcare a table with limit value
+type category_tt is table of hf_category%rowtype index by pls_integer;
+hf_category_list category_tt;
+begin
+v_start_time_nr := dbms_utility.get_time();
+    open cur_category;
+    loop
+        hf_category_list.delete; --start with clean var
+        fetch cur_category bulk collect into hf_category_list limit v_limit_number;
+            forall indx in 1..hf_category_list.count
+            insert into hf_category
+            values hf_category_list(indx);
+            commit;--frees up the memory
+            
+            exit when cur_category%notfound;
+            
+    end loop;
+    close cur_category;
+    v_end_time_nr := dbms_utility.get_time();
+    v_elapsed_time_nr := v_end_time_nr - v_start_time_nr;
+    dbms_output.put_line('Elapsed:'||v_elapsed_time_nr/100 ||' secs.');
+end;
+
+
+--procedure to move data from stage to hf_company
+procedure p_insert_hf_company (v_limit_number number)
+is
+v_start_time_nr number;
+v_end_time_nr number;
+v_elapsed_time_nr number;
+--cursor to select value from stage table
+cursor cur_company is
+select seq_hf_company.nextval, company_name from
+(select distinct trim(upper(company_name)) company_name from MASY_IB48.MEDI_SUPPLIER_STAGE
+minus
+select company_name
+from hf_company);
+--delcare a table with limit value
+type company_tt is table of hf_company%rowtype index by pls_integer;
+hf_company_list company_tt;
+begin
+v_start_time_nr := dbms_utility.get_time();
+    open cur_company;
+    loop
+        hf_company_list.delete; --start with clean var
+        fetch cur_company bulk collect into hf_company_list limit v_limit_number;
+            forall indx in 1..hf_company_list.count
+            insert into hf_company
+            values hf_company_list(indx);
+            commit;--frees up the memory
+            
+            exit when cur_company%notfound;
+            
+    end loop;
+    close cur_company;
+    v_end_time_nr := dbms_utility.get_time();
+    v_elapsed_time_nr := v_end_time_nr - v_start_time_nr;
+    dbms_output.put_line('Elapsed:'||v_elapsed_time_nr/100 ||' secs.');
+end;
+
+--hf_dba
+--procedure to move data from stage to hf_dba
+procedure p_insert_hf_dba (v_limit_number number)
+is
+v_start_time_nr number;
+v_end_time_nr number;
+v_elapsed_time_nr number;
+--cursor to select value from stage table
+cursor cur_dba is
+select seq_hf_dba.nextval, dba_name,company_fk from
+(select distinct trim(upper(dba_name)) dba_name, company_pk company_fk 
+from MASY_IB48.MEDI_SUPPLIER_STAGE stg, hf_company
+where trim(upper(stg.company_name)) = hf_company.company_name
+minus
+select dba_name, company_fk
+from hf_dba);
+--delcare a table with limit value
+type dba_tt is table of hf_dba%rowtype index by pls_integer;
+hf_dba_list dba_tt;
+begin
+v_start_time_nr := dbms_utility.get_time();
+    open cur_dba;
+    loop
+        hf_dba_list.delete; --start with clean var
+        fetch cur_dba bulk collect into hf_dba_list limit v_limit_number;
+            forall indx in 1..hf_dba_list.count
+            insert into hf_dba
+            values hf_dba_list(indx);
+            commit;--frees up the memory
+            
+            exit when cur_dba%notfound;
+            
+    end loop;
+    close cur_dba;
+    v_end_time_nr := dbms_utility.get_time();
+    v_elapsed_time_nr := v_end_time_nr - v_start_time_nr;
+    dbms_output.put_line('Elapsed:'||v_elapsed_time_nr/100 ||' secs.');
+end;
+
+--hf_phone
+--procedure to move data from stage to hf_phone
+procedure p_insert_hf_phone (v_limit_number number)
+is
+v_start_time_nr number;
+v_end_time_nr number;
+v_elapsed_time_nr number;
+--cursor to select value from stage table
+cursor cur_phone is
+select seq_hf_phone.nextval, phone,dba_fk from
+(select distinct nvl2(trim(phone),substr(trim(phone),2,3)||substr(trim(phone),6,3)||substr(trim(phone),10),null) phone,
+dba_pk dba_fk from MASY_IB48.MEDI_SUPPLIER_STAGE stg, hf_dba, hf_company
+where trim(upper(stg.dba_name)) = hf_dba.dba_name 
+and trim(upper(stg.company_name)) = hf_company.company_name 
+and hf_dba.company_fk = hf_company.company_pk
+minus
+select phone_number, dba_fk
+from hf_phone);
+--delcare a table with limit value
+type phone_tt is table of hf_phone%rowtype index by pls_integer;
+hf_phone_list phone_tt;
+begin
+v_start_time_nr := dbms_utility.get_time();
+    open cur_phone;
+    loop
+        hf_phone_list.delete; --start with clean var
+        fetch cur_phone bulk collect into hf_phone_list limit v_limit_number;
+            forall indx in 1..hf_phone_list.count
+            insert into hf_phone
+            values hf_phone_list(indx);
+            commit;--frees up the memory
+            
+            exit when cur_phone%notfound;
+            
+    end loop;
+    close cur_phone;
+    v_end_time_nr := dbms_utility.get_time();
+    v_elapsed_time_nr := v_end_time_nr - v_start_time_nr;
+    dbms_output.put_line('Elapsed:'||v_elapsed_time_nr/100 ||' secs.');
+end;
+
+--hf_address
+--procedure to move data from stage to hf_address
+procedure p_insert_hf_address (v_limit_number number)
+is
+v_start_time_nr number;
+v_end_time_nr number;
+v_elapsed_time_nr number;
+--cursor to select value from stage table
+cursor cur_address is
+select seq_hf_address.nextval, address,address2,city,state,zip,dba_fk from
+(select distinct trim(upper(address)) address,trim(upper(address2))address2, trim(upper(city))city,
+trim(upper(state)) state, to_number(trim(zip)) zip, dba_pk dba_fk
+from MASY_IB48.MEDI_SUPPLIER_STAGE stg, hf_dba, hf_company
+where trim(upper(stg.dba_name)) = hf_dba.dba_name 
+and trim(upper(stg.company_name)) = hf_company.company_name 
+and hf_dba.company_fk = hf_company.company_pk
+minus 
+select address,address2,city, state, zip,dba_fk
+from hf_address);
+--delcare a table with limit value
+type address_tt is table of hf_address%rowtype index by pls_integer;
+hf_address_list address_tt;
+begin
+v_start_time_nr := dbms_utility.get_time();
+    open cur_address;
+    loop
+        hf_address_list.delete; --start with clean var
+        fetch cur_address bulk collect into hf_address_list limit v_limit_number;
+            forall indx in 1..hf_address_list.count
+            insert into hf_address
+            values hf_address_list(indx);
+            commit;--frees up the memory
+            
+            exit when cur_address%notfound;
+            
+    end loop;
+    close cur_address;
+    v_end_time_nr := dbms_utility.get_time();
+    v_elapsed_time_nr := v_end_time_nr - v_start_time_nr;
+    dbms_output.put_line('Elapsed:'||v_elapsed_time_nr/100 ||' secs.');
+end;
+--hf_category_company
+--procedure to move data from stage to hf_category_company
+procedure p_insert_hf_category_company (v_limit_number number)
+is
+v_start_time_nr number;
+v_end_time_nr number;
+v_elapsed_time_nr number;
+--cursor to select value from stage table
+cursor cur_category_company is
+select seq_hf_category_company.nextval, company_fk,category_fk from
+(select distinct company_pk company_fk, category_pk category_fk
+from MASY_IB48.MEDI_SUPPLIER_STAGE stg, hf_category, hf_company
+where trim(upper(stg.product_category)) = hf_category.product_category 
+and trim(upper(stg.company_name)) = hf_company.company_name 
+minus 
+select company_fk, category_fk
+from hf_category_company);
+--delcare a table with limit value
+type category_company_tt is table of hf_category_company%rowtype index by pls_integer;
+hf_category_company_list category_company_tt;
+begin
+v_start_time_nr := dbms_utility.get_time();
+    open cur_category_company;
+    loop
+        hf_category_company_list.delete; --start with clean var
+        fetch cur_category_company bulk collect into hf_category_company_list limit v_limit_number;
+            forall indx in 1..hf_category_company_list.count
+            insert into hf_category_company
+            values hf_category_company_list(indx);
+            commit;--frees up the memory
+            
+            exit when cur_category_company%notfound;
+            
+    end loop;
+    close cur_category_company;
+    v_end_time_nr := dbms_utility.get_time();
+    v_elapsed_time_nr := v_end_time_nr - v_start_time_nr;
+    dbms_output.put_line('Elapsed:'||v_elapsed_time_nr/100 ||' secs.');
+end;
+
+--calculate time
+procedure p_load_supplier_date
+is
+v_overall_start number;
+v_start_nr number;
+v_end_nr number;
+v_elapsed_nr number;
+begin
+--------------ii. Must use a "sensible" limit ...test and see which size is most efficient
+--------------iii. Must use timers to check how long the process takes (eg: dbms_utility.get_time() )
+    v_overall_start := dbms_utility.get_time();
+    v_start_nr := dbms_utility.get_time();
+    --insert hf_category table
+    p_insert_hf_category (5000);
+    v_end_nr := dbms_utility.get_time();
+    v_elapsed_nr :=v_end_nr-v_start_nr;
+    dbms_output.put_line('Elapsed category:'||v_elapsed_nr/100|| ' secs.');
+    
+    v_start_nr := dbms_utility.get_time();
+    --insert hf_company table
+    p_insert_hf_company(5000);
+    v_end_nr := dbms_utility.get_time();
+    v_elapsed_nr :=v_end_nr-v_start_nr;
+    dbms_output.put_line('Elapsed company:'||v_elapsed_nr/100|| ' secs.');
+    
+    v_start_nr := dbms_utility.get_time();
+    --insert hf_dba table
+    p_insert_hf_dba(5000);
+    v_end_nr := dbms_utility.get_time();
+    v_elapsed_nr :=v_end_nr-v_start_nr;
+    dbms_output.put_line('Elapsed dba:'||v_elapsed_nr/100|| ' secs.');
+    
+    v_start_nr := dbms_utility.get_time();
+    --insert hf_phone table
+    p_insert_hf_phone(5000); 
+    v_end_nr := dbms_utility.get_time();
+    v_elapsed_nr :=v_end_nr-v_start_nr;
+    dbms_output.put_line('Elapsed phone:'||v_elapsed_nr/100|| ' secs.');   
+    
+    v_start_nr := dbms_utility.get_time();
+    --insert hf_address table
+    p_insert_hf_address(5000); 
+    v_end_nr := dbms_utility.get_time();
+    v_elapsed_nr :=v_end_nr-v_start_nr;
+    dbms_output.put_line('Elapsed address:'||v_elapsed_nr/100|| ' secs.');
+    
+    v_start_nr := dbms_utility.get_time();
+    --insert hf_category_company table
+    p_insert_hf_category_company(5000);
+    v_end_nr := dbms_utility.get_time();
+    v_elapsed_nr :=v_end_nr-v_start_nr;
+    dbms_output.put_line('Elapsed category_company:'||v_elapsed_nr/100|| ' secs.');
+    
+    v_elapsed_nr :=v_end_nr-v_overall_start;
+    dbms_output.put_line('Elapsed total:'||v_elapsed_nr/100|| ' secs.');
+end;
+
+end hf_insert_pkg;
+-- test time,and after checking the time, I find that limit 5000is the fastest 27s
+begin
+hf_insert_pkg.p_load_supplier_date;
+end;
+
+--truncate functions
+truncate table hf_address;
+truncate table hf_phone;
+truncate table hf_category_company;
+truncate table hf_category;
+truncate table hf_company;
+truncate table hf_dba;
+select * from MASY_IB48.MEDI_SUPPLIER_STAGE
+--create view that mimics the stage table
+create or replace view hf_supplier_view
+as
+select company_pk,company_name,category_pk,product_category,dba_pk,dba_name,address_pk,address,address2,city,
+state,zip,phone_pk,
+nvl2(phone_number,'('||substr(phone_number,1,3)||')'||substr(phone_number,4,3)||'-'||substr(phone_number,7),null) phone_number
+from hf_company, hf_dba, hf_address, hf_phone, hf_category, hf_category_company
+where hf_dba.dba_pk = hf_address.dba_fk
+and hf_category.category_pk = hf_category_company.category_fk
+and hf_dba.company_fk = hf_company.company_pk
+and hf_company.company_pk = hf_category_company.company_fk
+and hf_phone.dba_fk = hf_dba.dba_pk;
+
+select * from hf_supplier_view;
+
+--package for view to do insert, update and delete
+create or replace package hf_supplier_view_pkg
+is
+--public
+function f_company_exists_yn(i_company varchar2) return varchar2;
+function f_category_exists_yn(i_category varchar2) return varchar2;
+function f_dba_exists_yn(i_dba_name varchar2,i_company_fk number) return varchar2;
+function f_address_exists_yn(i_address varchar2,i_address2 varchar2,i_city varchar2,
+            i_state varchar2, i_zip number, i_dba_fk number) return varchar2;
+function f_format_phone_number(i_phone_number varchar2) return varchar2;            
+function f_phone_exists_yn(i_phone varchar2,i_dba_fk number) return varchar2;
+
+procedure p_insert_view(i_company_name varchar2, i_category_name varchar2, i_dba_name varchar2,
+i_address varchar2, i_address2 varchar2, i_city varchar2, i_state varchar2, i_zip number, i_phone varchar2);
+
+procedure p_update_company(i_company_name varchar2, i_company_pk number);
+
+procedure p_upate_category(i_product_category varchar2, i_category_pk number);
+
+procedure p_update_dba(i_dba_name varchar2, i_dba_pk number);
+
+procedure p_update_address(i_address varchar2, i_dba_pk number);
+
+procedure p_update_address2(i_address2 varchar2, i_dba_pk number);
+
+procedure p_update_city(i_city varchar2, i_dba_pk number);
+
+procedure p_update_state(i_state varchar2, i_dba_pk number);
+
+procedure p_update_zip(i_zip number, i_dba_pk number);
+
+procedure p_update_phone(i_phone varchar2, i_dba_pk number);
+
+procedure p_delete_view(i_company_pk number, i_category_pk number, i_dba_pk number);
+
+end hf_supplier_view_pkg;
+
+create or replace package body hf_supplier_view_pkg
+is
+--private
+
+--create or replace
+--drop function f_company_exists_yn
+function f_company_exists_yn(i_company varchar2) return varchar2
+is
+    v_yn_tx varchar2(2);
+    v_count_nr number;
+begin
+    --check if company exists
+    select count(*)
+    into v_count_nr
+    from hf_company
+    where hf_company.company_name = i_company;
+    
+    ---return yes or no
+    select decode(sign(v_count_nr),1,'Y','N') exist_yn
+    into v_yn_tx 
+    from dual;
+    
+    return v_yn_tx;
+end;
+
+--create or replace
+--drop function f_category_exists_yn
+function f_category_exists_yn(i_category varchar2) return varchar2
+is
+    v_yn_tx varchar2(2);
+    v_count_nr number;
+begin
+    --check if category exist 
+    select count(*)
+    into v_count_nr
+    from hf_category
+    where product_category = i_category;
+    
+    ---return yes or no
+    select decode(sign(v_count_nr),1,'Y','N') exist_yn
+    into v_yn_tx 
+    from dual;
+    
+    return v_yn_tx;
+end;
+
+--create or replace
+--drop function f_dba_exists_yn
+function f_dba_exists_yn(i_dba_name varchar2,i_company_fk number) return varchar2
+is
+    v_yn_tx varchar2(2);
+    v_count_nr number;
+begin
+    --check if dba exist 
+    select count(*)
+    into v_count_nr
+    from hf_dba
+    where hf_dba.dba_name = i_dba_name
+    and company_fk = i_company_fk;
+    
+    ---return yes or no
+    select decode(sign(v_count_nr),1,'Y','N') exist_yn
+    into v_yn_tx 
+    from dual;
+    
+    return v_yn_tx;
+end;
+
+--create or replace
+--drop function f_address_exists_yn
+function f_address_exists_yn(i_address varchar2,i_address2 varchar2,i_city varchar2,
+            i_state varchar2, i_zip number, i_dba_fk number) return varchar2
+is
+    v_yn_tx varchar2(2);
+    v_count_nr number;
+begin
+    --check if address exists
+    select count(*)
+    into v_count_nr
+    from hf_address
+    where hf_address.address = i_address
+    and hf_address.address2 = i_address2
+    and hf_address.city = i_city
+    and hf_address.state = i_state
+    and hf_address.zip = i_zip
+    and hf_address.dba_fk = i_dba_fk;
+    
+    ---return yes or no
+    select decode(sign(v_count_nr),1,'Y','N') exist_yn
+    into v_yn_tx 
+    from dual;
+    
+    return v_yn_tx;
+end;
+
+--create or replace
+--drop function f_format_phone_number
+function f_format_phone_number(i_phone_number varchar2) return varchar2
+is
+v_phone_tx varchar2(25);
+begin
+    select nvl2(i_phone_number,'('||substr(i_phone_number,1,3)||')'||substr(i_phone_number,4,3)||'-'||substr(i_phone_number,7),null)
+    into v_phone_tx from dual;
+    
+return v_phone_tx;
+end;
+
+--create or replace
+--drop function f_phone_exists_yn
+function f_phone_exists_yn(i_phone varchar2,i_dba_fk number) return varchar2
+is
+    v_yn_tx varchar2(2);
+    v_count_nr number;
+begin
+    --check if type exist in ml_phone table  
+    select count(*)
+    into v_count_nr
+    from hf_phone
+    where hf_phone.phone_number = i_phone
+    and hf_phone.dba_fk = i_dba_fk;
+    
+    ---return yes or no
+    select decode(sign(v_count_nr),1,'Y','N') exist_yn
+    into v_yn_tx 
+    from dual;
+    
+    return v_yn_tx;
+end;
+
+
+procedure p_insert_view(i_company_name varchar2, i_category_name varchar2, i_dba_name varchar2,
+i_address varchar2, i_address2 varchar2, i_city varchar2, i_state varchar2, i_zip number, i_phone varchar2)
+is
+    v_category_pk number;
+    v_company_pk number;
+    v_dba_pk number;
+    v_address_pk number;
+    v_phone_pk number;
+begin
+
+--insert company
+    if f_company_exists_yn(i_company_name) = 'N' then
+        insert into hf_company(company_name)
+        values(i_company_name)
+        returning company_pk into v_company_pk;
+    else
+        select company_pk into v_company_pk
+        from hf_company where hf_company.company_name = i_company_name;
+    end if;
+    
+--insert product category
+    if f_category_exists_yn(i_category_name) = 'N' then
+        insert into hf_category(product_category)
+        values(i_category_name)
+        returning category_pk into v_category_pk;
+    else
+        select category_pk into v_category_pk
+        from hf_category where product_category = i_category_name;
+    end if;
+--insert dba
+    if f_dba_exists_yn(i_dba_name,v_company_pk) = 'N' then
+        insert into hf_dba(dba_name, company_fk)
+        values(i_dba_name,v_company_pk)
+        returning dba_pk into v_dba_pk;
+    else
+        select dba_pk into v_dba_pk
+        from hf_dba where hf_dba.dba_name = i_dba_name and hf_dba.company_fk = v_company_pk;
+    end if;
+--insert address
+    if f_address_exists_yn(i_address, i_address2, i_city, i_state, i_zip, v_dba_pk) = 'N' then
+        insert into hf_address(address, address2, city, state, zip, dba_fk)
+        values(i_address, i_address2, i_city, i_state, i_zip, v_dba_pk)
+        returning address_pk into v_address_pk;
+    else
+        select address_pk into v_address_pk
+        from hf_address
+        where hf_address.address = i_address
+        and hf_address.address2 = i_address2
+        and hf_address.city = i_city
+        and hf_address.state = i_state
+        and hf_address.zip = i_zip
+        and hf_address.dba_fk = v_dba_pk;
+    end if;
+--insert phone
+     if f_phone_exists_yn(i_phone,v_dba_pk) = 'N' then
+        insert into hf_phone(phone_number, dba_fk)
+        values(i_phone,v_dba_pk)
+        returning phone_pk into v_phone_pk;
+    else
+        select phone_pk into v_phone_pk
+        from hf_phone
+        where hf_phone.phone_number=i_phone
+        and hf_phone.dba_fk = v_dba_pk;
+    end if;
+end;
+
+--update
+--create or replace
+--drop procedure p_update_company
+procedure p_update_company(i_company_name varchar2, i_company_pk number)
+is
+begin
+    update hf_company
+    set hf_company.company_name = i_company_name
+    where company_pk = i_company_pk;
+end;
+
+procedure p_upate_category(i_product_category varchar2, i_category_pk number)
+is
+begin
+    update hf_category
+    set product_category = i_product_category
+    where category_pk = i_category_pk;
+end;
+
+procedure p_update_dba(i_dba_name varchar2, i_dba_pk number)
+is
+begin
+    update hf_dba
+    set dba_name = i_dba_name
+    where dba_pk = i_dba_pk;
+end;
+
+procedure p_update_address(i_address varchar2, i_dba_pk number)
+is
+begin
+    update hf_address
+    set address = i_address
+    where dba_fk = i_dba_pk;
+end;
+
+procedure p_update_address2(i_address2 varchar2, i_dba_pk number)
+is
+begin
+    update hf_address
+    set address2 = i_address2
+    where dba_fk = i_dba_pk;
+end;
+
+procedure p_update_city(i_city varchar2, i_dba_pk number)
+is
+begin
+    update hf_address
+    set city = i_city
+    where dba_fk = i_dba_pk;   
+end;
+
+procedure p_update_state(i_state varchar2, i_dba_pk number)
+is
+begin
+    update hf_address
+    set state = i_state
+    where dba_fk = i_dba_pk;  
+end;
+
+procedure p_update_zip(i_zip number, i_dba_pk number)
+is
+begin
+    update hf_address
+    set zip = i_zip
+    where dba_fk = i_dba_pk; 
+end;
+
+
+
+procedure p_update_phone(i_phone varchar2, i_dba_pk number)
+is
+begin
+    update hf_phone
+    set phone_number = i_phone
+    where dba_fk = i_dba_pk;
+end;
+
+--delte procedure
+procedure p_delete_view(i_company_pk number, i_category_pk number, i_dba_pk number)
+is
+begin
+    delete from hf_company where company_pk = i_company_pk;
+    delete from hf_category where category_pk = i_category_pk;
+    delete from hf_dba where dba_pk = i_dba_pk;
+    delete from hf_phone where dba_fk = i_dba_pk;
+    delete from hf_address where dba_fk = i_dba_pk;
+end;
+
+end hf_supplier_view_pkg;
+
+--create the trigger for view for doing insert update and delete
+create or replace trigger trig_supplier_view
+instead of insert or update or delete
+on hf_supplier_view
+referencing new as new old as old
+begin
+--inserting
+if inserting then
+hf_supplier_view_pkg.p_insert_view( upper(trim(:new.company_name)),upper(trim(:new.product_category)) , upper(trim(:new.dba_name)),
+upper(trim(:new.address)) ,upper(trim(:new.address2)) , upper(trim(:new.city)) , upper(trim(:new.state)) , trim(:new.zip), trim(:new.phone_number));
+
+--updating
+elsif updating then
+--update company_name
+    --update company_name
+hf_supplier_view_pkg.p_update_company(upper(trim(:new.company_name)), :old.company_pk);
+    --update category_name
+hf_supplier_view_pkg.p_upate_category(upper(trim(:new.product_category)), :old.category_pk);
+    --update dba_name
+hf_supplier_view_pkg.p_update_dba(upper(trim(:new.dba_name)), :old.dba_pk );
+    --update address
+hf_supplier_view_pkg.p_update_address(upper(trim(:new.address)), :old.dba_pk );
+    --uodate address2
+hf_supplier_view_pkg.p_update_address2(upper(trim(:new.address2)), :old.dba_pk );
+    --update city
+hf_supplier_view_pkg.p_update_city(upper(trim(:new.city)), :old.dba_pk );
+    --update state
+hf_supplier_view_pkg.p_update_state(upper(trim(:new.state)), :old.dba_pk );
+    --update zip
+hf_supplier_view_pkg.p_update_zip(trim(:new.zip), :old.dba_pk );
+    --update phone
+hf_supplier_view_pkg.p_update_phone(trim(:new.phone_number), :old.dba_pk );
+    
+  ---delete record ---------  
+  elsif deleting then
+    hf_supplier_view_pkg.p_delete_view(:old.company_pk, :old.category_pk, :old.dba_pk);
+  end if;
+END;
+
+--Create a procedure that that does one INSERT, one UPDATE and one DELETE. You can hard code the values needed
+create or replace procedure p_insert_update_delte_supplier_view
+is
+begin
+--insert
+insert into hf_supplier_view(company_name, product_category, dba_name, address, address2, city, state, zip, phone_number)
+values('Electra information systems', 'Mechanical devices', 'Harrison', '9420 alstyne', 'Number 2', 'Elmhurst', 'NY', 11373, '3478886699');
+--update
+update hf_supplier_view
+set company_name = 'ABC APPLE'
+where company_pk = 699;
+
+--delete
+delete from hf_supplier_view
+where company_pk = 688
+and category_pk = 322
+and dba_pk=666;
+end;
+
+begin
+p_insert_update_delte_supplier_view;
+end;
